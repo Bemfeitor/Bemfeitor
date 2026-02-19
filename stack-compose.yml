@@ -1,0 +1,94 @@
+version: '3.8'
+
+# Stack para Portainer (Docker Swarm)
+# Usa portas alternativas para evitar conflitos
+
+services:
+  audit-postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: bradesco_cobranca
+    ports:
+      - "5433:5432"
+    volumes:
+      - audit_postgres_data:/var/lib/postgresql/data
+    networks:
+      - audit_network
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  audit-redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    volumes:
+      - audit_redis_data:/data
+    networks:
+      - audit_network
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  audit-backend:
+    image: node:18-alpine
+    ports:
+      - "3002:3000"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://postgres:postgres@audit-postgres:5432/bradesco_cobranca
+      REDIS_URL: redis://audit-redis:6379
+      MOCK_BRADESCO: "true"
+      JWT_SECRET: dev-secret-key-123
+      PORT: 3000
+    working_dir: /app
+    volumes:
+      - ./backend:/app
+      - backend_node_modules:/app/node_modules
+    command: >
+      sh -c "npm ci && 
+             npx prisma generate && 
+             npx prisma db push && 
+             npm run start:prod"
+    networks:
+      - audit_network
+    depends_on:
+      - audit-postgres
+      - audit-redis
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  audit-frontend:
+    image: node:18-alpine
+    ports:
+      - "3003:3000"
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    command: >
+      sh -c "npm ci && npm start"
+    networks:
+      - audit_network
+    depends_on:
+      - audit-backend
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+volumes:
+  audit_postgres_data:
+  audit_redis_data:
+  backend_node_modules:
+  frontend_node_modules:
+
+networks:
+  audit_network:
+    driver: overlay

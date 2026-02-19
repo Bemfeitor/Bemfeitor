@@ -1,7 +1,7 @@
 version: '3.8'
 
-# Docker Compose para desenvolvimento local
-# Para Portainer/Swarm use: docker-compose.swarm.yml ou stack-compose.yml
+# Versão compatível com Docker Swarm/Portainer
+# NÃO usa 'build', 'container_name' ou portas padrão conflitantes
 
 services:
   postgres:
@@ -11,40 +11,54 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: bradesco_cobranca
     ports:
-      - "5432:5432"
+      - "5433:5432"  # Porta alternativa para evitar conflito
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+    networks:
+      - cobranca_network
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
 
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "6380:6379"  # Porta alternativa para evitar conflito
     volumes:
       - redis_data:/data
+    networks:
+      - cobranca_network
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
 
   backend:
     image: node:18-alpine
     ports:
       - "3002:3000"
     environment:
-      - NODE_ENV=development
+      - NODE_ENV=production
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/bradesco_cobranca
       - REDIS_URL=redis://redis:6379
       - MOCK_BRADESCO=true
       - JWT_SECRET=dev-secret-key-123
+      - PORT=3000
     working_dir: /app
     volumes:
       - ./backend:/app
       - /app/node_modules
+    command: sh -c "npm install && npx prisma generate && npx prisma db push && npm run start:prod"
+    networks:
+      - cobranca_network
     depends_on:
       - postgres
       - redis
-    command: sh -c "npm install && npx prisma generate && npx prisma db push && npm run start:dev"
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
 
   frontend:
     image: node:18-alpine
@@ -54,10 +68,20 @@ services:
     volumes:
       - ./frontend:/app
       - /app/node_modules
+    command: sh -c "npm install && npm start"
+    networks:
+      - cobranca_network
     depends_on:
       - backend
-    command: sh -c "npm install && npm start"
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
 
 volumes:
   postgres_data:
   redis_data:
+
+networks:
+  cobranca_network:
+    driver: overlay
