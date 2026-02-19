@@ -5,6 +5,7 @@ import { CreateBoletoDto } from './dto/create-boleto.dto';
 import { BradescoApiService } from './bradesco-api.service';
 import { firstValueFrom } from 'rxjs';
 import { addDays, format } from 'date-fns';
+import { gerarCodigoBarrasELinhaDigitavel, calcularFatorVencimento } from './boleto.utils';
 
 @Injectable()
 export class BoletoService {
@@ -107,9 +108,25 @@ export class BoletoService {
             const retorno = await this.bradescoApi.registrarBoleto(payload);
 
             // Mapeia retorno específico do novo layout
-            const linhaDigitavel = retorno.linhaDigitavel;
-            const codigoBarras = retorno.cdBarras || retorno.codigoBarras; // Fallback
+            let linhaDigitavel = retorno.linhaDigitavel;
+            let codigoBarras = retorno.cdBarras || retorno.codigoBarras; // Fallback
             const nossoNumero = retorno.nuTituloGerado;
+            
+            // Se o Bradesco não retornar código de barras/linha digitável, calculamos
+            if (!codigoBarras || !linhaDigitavel) {
+                const calculado = gerarCodigoBarrasELinhaDigitavel(
+                    dto.valor,
+                    new Date(dto.dataVencimento),
+                    config.agencia,
+                    config.carteira,
+                    String(nossoNumero),
+                    config.conta,
+                    '237',
+                    '9'
+                );
+                codigoBarras = calculado.codigoBarras;
+                linhaDigitavel = calculado.linhaDigitavel;
+            }
 
             const boleto = await this.prisma.boleto.create({
                 data: {
@@ -313,7 +330,6 @@ export class BoletoService {
     }
 
     async gerarPdf(nossoNumero: string): Promise<Buffer> {
-        // Simplificado: retorna um PDF dummy ou HTML
         const boleto = await this.prisma.boleto.findUnique({
             where: { nossoNumero },
             include: { cliente: true, configuracao: true },
@@ -321,28 +337,327 @@ export class BoletoService {
 
         if (!boleto) throw new BadRequestException('Boleto não encontrado');
 
-        // Aqui você integraria o Puppeteer para gerar PDF real
-        // Por ora, retornamos um HTML simples que o frontend pode exibir
+        // Calcula código de barras e linha digitável conforme padrão FEBRABAN
+        const { codigoBarras, linhaDigitavel } = gerarCodigoBarrasELinhaDigitavel(
+            boleto.valorNominal,
+            boleto.dataVencimento,
+            boleto.configuracao.agencia,
+            boleto.configuracao.carteira,
+            boleto.nossoNumero,
+            boleto.configuracao.conta,
+            '237', // Código do Bradesco
+            '9'    // Real
+        );
+
+        // Atualiza o boleto com os valores calculados
+        await this.prisma.boleto.update({
+            where: { nossoNumero },
+            data: { codigoBarras, linhaDigitavel }
+        });
+
+        // Formata CNPJ
+        const cnpj = `${boleto.configuracao.cnpjRaiz}.${boleto.configuracao.filial}.${boleto.configuracao.controle}`;
+        
+        // Formata valores
+        const valorFormatado = boleto.valorNominal.toLocaleString('pt-BR', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+
         const html = `
-      <html>
-        <body style="font-family: Arial; padding: 40px;">
-          <h1>Boleto de Cobrança</h1>
-          <hr>
-          <p><strong>Beneficiário:</strong> ${boleto.configuracao.descricao}</p>
-          <p><strong>CNPJ:</strong> ${boleto.configuracao.cnpjRaiz}.${boleto.configuracao.filial}/${boleto.configuracao.controle}</p>
-          <br>
-          <p><strong>Pagador:</strong> ${boleto.cliente.nome}</p>
-          <p><strong>Documento:</strong> ${boleto.cliente.documento}</p>
-          <br>
-          <p><strong>Nosso Número:</strong> ${boleto.nossoNumero}</p>
-          <p><strong>Valor:</strong> R$ ${boleto.valorNominal}</p>
-          <p><strong>Vencimento:</strong> ${format(boleto.dataVencimento, 'dd/MM/yyyy')}</p>
-          <br>
-          <p><strong>Linha Digitável:</strong></p>
-          <p style="font-size: 18px; letter-spacing: 2px;">${boleto.linhaDigitavel}</p>
-        </body>
-      </html>
-    `;
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Boleto de Cobrança - Bradesco</title>
+    <style>
+        @page { size: A4; margin: 0; }
+        body {
+            font-family: 'Courier New', monospace;
+            font-size: 10px;
+            margin: 0;
+            padding: 10px;
+            background: white;
+        }
+        .boleto {
+            width: 100%;
+            max-width: 800px;
+            margin: 0 auto;
+            border: 1px solid #000;
+        }
+        .linha {
+            display: flex;
+            border-bottom: 1px solid #000;
+        }
+        .campo {
+            padding: 3px 5px;
+            border-right: 1px solid #000;
+            flex: 1;
+        }
+        .campo:last-child { border-right: none; }
+        .label {
+            font-size: 7px;
+            text-transform: uppercase;
+            color: #333;
+            display: block;
+        }
+        .valor {
+            font-size: 10px;
+            font-weight: bold;
+        }
+        .linha-digitavel {
+            font-size: 14px;
+            letter-spacing: 1px;
+            padding: 8px;
+            text-align: center;
+            border-bottom: 1px solid #000;
+            background: #f5f5f5;
+        }
+        .codigo-barras {
+            height: 50px;
+            margin: 10px 0;
+            display: flex;
+            justify-content: center;
+            align-items: flex-end;
+        }
+        .barra {
+            background: #000;
+            margin: 0 1px;
+        }
+        .logo {
+            font-size: 16px;
+            font-weight: bold;
+            color: #c00;
+        }
+        .banco-codigo {
+            font-size: 18px;
+            font-weight: bold;
+            padding: 5px 15px;
+        }
+        .cabecalho {
+            display: flex;
+            align-items: center;
+            border-bottom: 1px solid #000;
+            padding: 5px;
+        }
+        .recibo {
+            border-bottom: 2px dashed #000;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+        }
+        .ficha-compensacao {
+            padding: 10px;
+        }
+    </style>
+</head>
+<body>
+    <!-- RECIBO DO PAGADOR -->
+    <div class="recibo">
+        <div class="cabecalho">
+            <span class="logo">BRADESCO</span>
+            <span class="banco-codigo">237-9</span>
+            <span class="linha-digitavel" style="flex:1; background:none; border:none;">${linhaDigitavel}</span>
+        </div>
+        <div class="linha">
+            <div class="campo" style="flex: 3;">
+                <span class="label">Beneficiário</span>
+                <span class="valor">${boleto.configuracao.descricao}</span>
+            </div>
+            <div class="campo">
+                <span class="label">CNPJ</span>
+                <span class="valor">${cnpj}</span>
+            </div>
+            <div class="campo">
+                <span class="label">Agência/Código Beneficiário</span>
+                <span class="valor">${boleto.configuracao.agencia} / ${boleto.configuracao.conta}</span>
+            </div>
+        </div>
+        <div class="linha">
+            <div class="campo">
+                <span class="label">Nosso Número</span>
+                <span class="valor">${boleto.nossoNumero}</span>
+            </div>
+            <div class="campo">
+                <span class="label">Nº Documento</span>
+                <span class="valor">${boleto.seuNumero || boleto.nossoNumero}</span>
+            </div>
+            <div class="campo">
+                <span class="label">Vencimento</span>
+                <span class="valor">${format(boleto.dataVencimento, 'dd/MM/yyyy')}</span>
+            </div>
+            <div class="campo">
+                <span class="label">Valor Documento</span>
+                <span class="valor">R$ ${valorFormatado}</span>
+            </div>
+        </div>
+        <div class="linha">
+            <div class="campo" style="flex: 2;">
+                <span class="label">Pagador</span>
+                <span class="valor">${boleto.cliente.nome} - CPF/CNPJ: ${boleto.cliente.documento}</span>
+            </div>
+            <div class="campo">
+                <span class="label">Endereço</span>
+                <span class="valor">${boleto.cliente.logradouro}, ${boleto.cliente.numero}</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- FICHA DE COMPENSAÇÃO -->
+    <div class="ficha-compensacao">
+        <div class="cabecalho">
+            <span class="logo">BRADESCO</span>
+            <span class="banco-codigo">237-9</span>
+            <span class="linha-digitavel" style="flex:1; background:none; border:none;">${linhaDigitavel}</span>
+        </div>
+        
+        <div class="linha">
+            <div class="campo" style="flex: 3;">
+                <span class="label">Local de Pagamento</span>
+                <span class="valor">Pagável preferencialmente na Rede Bradesco ou Bradesco Expresso</span>
+            </div>
+            <div class="campo">
+                <span class="label">Vencimento</span>
+                <span class="valor">${format(boleto.dataVencimento, 'dd/MM/yyyy')}</span>
+            </div>
+        </div>
+        
+        <div class="linha">
+            <div class="campo" style="flex: 3;">
+                <span class="label">Beneficiário</span>
+                <span class="valor">${boleto.configuracao.descricao} - CNPJ: ${cnpj}</span>
+            </div>
+            <div class="campo">
+                <span class="label">Agência/Código Beneficiário</span>
+                <span class="valor">${boleto.configuracao.agencia} / ${boleto.configuracao.conta}</span>
+            </div>
+        </div>
+        
+        <div class="linha">
+            <div class="campo">
+                <span class="label">Data do Documento</span>
+                <span class="valor">${format(boleto.dataEmissao, 'dd/MM/yyyy')}</span>
+            </div>
+            <div class="campo">
+                <span class="label">Nº Documento</span>
+                <span class="valor">${boleto.seuNumero || boleto.nossoNumero}</span>
+            </div>
+            <div class="campo">
+                <span class="label">Espécie Doc</span>
+                <span class="valor">DM</span>
+            </div>
+            <div class="campo">
+                <span class="label">Aceite</span>
+                <span class="valor">N</span>
+            </div>
+            <div class="campo">
+                <span class="label">Data Processamento</span>
+                <span class="valor">${format(boleto.dataEmissao, 'dd/MM/yyyy')}</span>
+            </div>
+            <div class="campo">
+                <span class="label">Nosso Número</span>
+                <span class="valor">${boleto.nossoNumero}</span>
+            </div>
+        </div>
+        
+        <div class="linha">
+            <div class="campo">
+                <span class="label">Uso do Banco</span>
+                <span class="valor"></span>
+            </div>
+            <div class="campo">
+                <span class="label">Carteira</span>
+                <span class="valor">${boleto.configuracao.carteira}</span>
+            </div>
+            <div class="campo">
+                <span class="label">Espécie</span>
+                <span class="valor">R$</span>
+            </div>
+            <div class="campo">
+                <span class="label">Quantidade</span>
+                <span class="valor"></span>
+            </div>
+            <div class="campo">
+                <span class="label">Valor</span>
+                <span class="valor"></span>
+            </div>
+            <div class="campo">
+                <span class="label">(=) Valor Documento</span>
+                <span class="valor">R$ ${valorFormatado}</span>
+            </div>
+        </div>
+        
+        <div class="linha">
+            <div class="campo" style="flex: 5; min-height: 60px;">
+                <span class="label">Instruções (Texto de responsabilidade do beneficiário)</span>
+                <span class="valor" style="white-space: pre-line;">Após o vencimento cobrar multa de 2% + juros de 1% ao mês.
+Não receber após 60 dias do vencimento.</span>
+            </div>
+            <div class="campo" style="flex: 1;">
+                <span class="label">(-) Desconto/Abatimento</span>
+                <span class="valor"></span>
+            </div>
+        </div>
+        
+        <div class="linha">
+            <div class="campo" style="flex: 5;">
+                <span class="label">Pagador</span>
+                <span class="valor">${boleto.cliente.nome}</span>
+                <span class="valor">${boleto.cliente.logradouro}, ${boleto.cliente.numero} - ${boleto.cliente.bairro}</span>
+                <span class="valor">${boleto.cliente.cep} - ${boleto.cliente.cidade}/${boleto.cliente.uf}</span>
+                <span class="valor">CNPJ/CPF: ${boleto.cliente.documento}</span>
+            </div>
+            <div class="campo" style="flex: 1;">
+                <span class="label">(-) Outras Deduções</span>
+                <span class="valor"></span>
+            </div>
+        </div>
+        
+        <div class="linha">
+            <div class="campo" style="flex: 5;">
+                <span class="label">Sacador/Avalista</span>
+                <span class="valor"></span>
+            </div>
+            <div class="campo" style="flex: 1;">
+                <span class="label">(+) Mora/Multa</span>
+                <span class="valor"></span>
+            </div>
+        </div>
+        
+        <div class="linha">
+            <div class="campo" style="flex: 5;"></div>
+            <div class="campo" style="flex: 1;">
+                <span class="label">(=) Valor Cobrado</span>
+                <span class="valor"></span>
+            </div>
+        </div>
+        
+        <div style="margin-top: 15px; padding: 10px;">
+            <div class="label" style="font-size: 9px; margin-bottom: 5px;">Código de Barras (padrão FEBRABAN 44 posições)</div>
+            <div style="font-family: monospace; font-size: 12px; letter-spacing: 2px; word-break: break-all; background: #f5f5f5; padding: 8px; border: 1px solid #ccc;">
+                ${codigoBarras}
+            </div>
+            <div style="font-size: 8px; margin-top: 5px; color: #666;">
+                Banco: ${codigoBarras.substring(0,3)} | Moeda: ${codigoBarras.substring(3,4)} | DV: ${codigoBarras.substring(4,5)} | 
+                Fator Venc.: ${codigoBarras.substring(5,9)} | Valor: ${codigoBarras.substring(9,19)} | 
+                Campo Livre: ${codigoBarras.substring(19,44)}
+            </div>
+        </div>
+        
+        <div style="margin-top: 15px; padding: 10px; background: #f9f9f9; border: 1px solid #ddd;">
+            <div class="label" style="font-size: 9px; margin-bottom: 5px;">Informações Técnicas</div>
+            <div style="font-size: 8px; color: #666; line-height: 1.5;">
+                <strong>Código de Barras (44 posições):</strong> ${codigoBarras}<br>
+                <strong>Linha Digitável (47 posições):</strong> ${linhaDigitavel}<br>
+                <strong>Agência:</strong> ${boleto.configuracao.agencia} | 
+                <strong>Carteira:</strong> ${boleto.configuracao.carteira} | 
+                <strong>Nosso Número:</strong> ${boleto.nossoNumero} | 
+                <strong>Conta:</strong> ${boleto.configuracao.conta}<br>
+                <strong>Fator de Vencimento:</strong> ${calcularFatorVencimento(boleto.dataVencimento)}
+            </div>
+        </div>
+    </div>
+</body>
+</html>`;
 
         return Buffer.from(html);
     }

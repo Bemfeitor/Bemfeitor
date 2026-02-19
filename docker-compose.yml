@@ -30,7 +30,7 @@ services:
     build: ./backend
     container_name: cobranca_api
     ports:
-      - "3000:3000"
+      - "3002:3000"
     environment:
       - NODE_ENV=development
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/bradesco_cobranca
@@ -51,7 +51,7 @@ services:
     build: ./frontend
     container_name: cobranca_web
     ports:
-      - "3001:3000"
+      - "3003:3000"
     volumes:
       - ./frontend:/app
       - /app/node_modules

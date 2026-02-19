@@ -17,9 +17,10 @@ async function bootstrap() {
     const document = SwaggerModule.createDocument(app, config);
     SwaggerModule.setup('api', app, document);
 
-    await app.listen(3000);
-    console.log('🚀 API rodando em http://localhost:3000');
-    console.log('📚 Swagger em http://localhost:3000/api');
+    const port = process.env.PORT || 3002;
+    await app.listen(port);
+    console.log(`🚀 API rodando em http://localhost:${port}`);
+    console.log(`📚 Swagger em http://localhost:${port}/api`);
     console.log('🎭 Modo Mock:', process.env.MOCK_BRADESCO === 'true' ? 'ATIVADO' : 'DESATIVADO');
 }
 bootstrap();
