@@ -41,10 +41,8 @@ services:
       - ./backend:/app
       - /app/node_modules
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_started
+      - postgres
+      - redis
     command: sh -c "npx prisma migrate dev --name init && npm run start:dev"
 
   frontend:
