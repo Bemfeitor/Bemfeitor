@@ -1,7 +1,8 @@
 version: '3.8'
 
 # Stack para Portainer (Docker Swarm)
-# Portas alteradas para evitar conflitos com outros serviços
+# APENAS backend e frontend expõem portas externas
+# Redis e Postgres usam apenas rede interna
 
 services:
   audit-postgres:
@@ -10,8 +11,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: bradesco_cobranca
-    ports:
-      - "15432:5432"  # Porta alta para evitar conflito
+    # SEM ports - apenas rede interna
     volumes:
       - audit_postgres_data:/var/lib/postgresql/data
     networks:
@@ -23,8 +23,7 @@ services:
 
   audit-redis:
     image: redis:7-alpine
-    ports:
-      - "16379:6379"  # Porta alta para evitar conflito
+    # SEM ports - apenas rede interna
     volumes:
       - audit_redis_data:/data
     networks:
@@ -37,7 +36,7 @@ services:
   audit-backend:
     image: node:18-alpine
     ports:
-      - "13002:3000"  # Porta alta para evitar conflito
+      - "3002:3000"
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://postgres:postgres@audit-postgres:5432/bradesco_cobranca
@@ -66,7 +65,7 @@ services:
   audit-frontend:
     image: node:18-alpine
     ports:
-      - "13003:3000"  # Porta alta para evitar conflito
+      - "3003:3000"
     working_dir: /app
     volumes:
       - frontend_data:/app
