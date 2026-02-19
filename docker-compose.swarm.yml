@@ -1,7 +1,7 @@
 version: '3.8'
 
 # Versão compatível com Docker Swarm/Portainer
-# NÃO usa 'build', 'container_name' ou portas padrão conflitantes
+# Portas altas para evitar conflitos com outros serviços
 
 services:
   postgres:
@@ -11,7 +11,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: bradesco_cobranca
     ports:
-      - "5433:5432"  # Porta alternativa para evitar conflito
+      - "15432:5432"  # Porta alta para evitar conflito
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -24,7 +24,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6380:6379"  # Porta alternativa para evitar conflito
+      - "16379:6379"  # Porta alta para evitar conflito
     volumes:
       - redis_data:/data
     networks:
@@ -37,19 +37,23 @@ services:
   backend:
     image: node:18-alpine
     ports:
-      - "3002:3000"
+      - "13002:3000"  # Porta alta para evitar conflito
     environment:
-      - NODE_ENV=production
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/bradesco_cobranca
-      - REDIS_URL=redis://redis:6379
-      - MOCK_BRADESCO=true
-      - JWT_SECRET=dev-secret-key-123
-      - PORT=3000
+      NODE_ENV: production
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/bradesco_cobranca
+      REDIS_URL: redis://redis:6379
+      MOCK_BRADESCO: "true"
+      JWT_SECRET: dev-secret-key-123
+      PORT: 3000
     working_dir: /app
     volumes:
       - ./backend:/app
-      - /app/node_modules
-    command: sh -c "npm install && npx prisma generate && npx prisma db push && npm run start:prod"
+      - backend_node_modules:/app/node_modules
+    command: >
+      sh -c "npm ci && 
+             npx prisma generate && 
+             npx prisma db push && 
+             npm run start:prod"
     networks:
       - cobranca_network
     depends_on:
@@ -63,12 +67,13 @@ services:
   frontend:
     image: node:18-alpine
     ports:
-      - "3003:3000"
+      - "13003:3000"  # Porta alta para evitar conflito
     working_dir: /app
     volumes:
       - ./frontend:/app
-      - /app/node_modules
-    command: sh -c "npm install && npm start"
+      - frontend_node_modules:/app/node_modules
+    command: >
+      sh -c "npm ci && npm start"
     networks:
       - cobranca_network
     depends_on:
@@ -81,7 +86,10 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  backend_node_modules:
+  frontend_node_modules:
 
 networks:
   cobranca_network:
     driver: overlay
+    attachable: true
